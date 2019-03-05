@@ -17,7 +17,7 @@ class TocItem:
 		# there are LOTS of combinations to deal with!
 		if self.subtitle == '':  # no subtitle
 			if self.roman != '':
-				outstring += '\t<a href="../text/' + self.filelink + '">' + '<span epub:type="z3998:roman">' + self.roman + '</span></a>\n'
+				outstring += '\t<a href="../text/' + self.filelink + '" epub:type="z3998:roman">' + self.roman + '</a>\n'
 			else:
 				outstring += '\t<a href="../text/' + self.filelink + '">' + self.title + '</a>\n'
 		else:  # there is a subtitle
@@ -176,6 +176,14 @@ def main():
 					tocitem.filelink = textf
 				else:
 					tocitem.filelink = textf + '#' + tocitem.id
+
+			# a header may include epub:type directly, eg <h5 epub:type="title z3998:roman">II</h5>
+			try:
+				attribs = h['epub:type']
+				if 'z3998:roman' in attribs:
+					tocitem.roman = extractstrings(h)
+			except KeyError:
+				print('header with no epub:type')
 
 			for child in h.children:
 				if child != '\n':
