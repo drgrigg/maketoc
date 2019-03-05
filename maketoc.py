@@ -1,4 +1,4 @@
-import re
+import argparse
 import os
 from bs4 import Tag, BeautifulSoup
 
@@ -14,7 +14,7 @@ class TocItem:
 	def output(self):
 		outstring = ''
 
-		# now there are LOTS of combinations to deal with!
+		# there are LOTS of combinations to deal with!
 		if self.subtitle == '':  # no subtitle
 			if self.roman != '':
 				outstring += '\t<a href="../text/' + self.filelink + '">' + '<span epub:type="z3998:roman">' + self.roman + '</span></a>\n'
@@ -41,7 +41,7 @@ def getcontentfiles(filename):
 
 def gethtml(filename):
 	try:
-		fileobject = open(filename, 'r')
+		fileobject = open(filename, 'r', encoding='utf-8')
 	except IOError:
 		print('Could not open ' + filename)
 		return ''
@@ -50,13 +50,14 @@ def gethtml(filename):
 	return text
 
 
-def outputtoc(listofitems, outpath):
+def outputtoc(listofitems, outfile):
 	if len(listofitems) < 2:
 		return
 
 	try:
-		os.remove(outpath + 'tempToC.txt')  # get rid of file if it already exists
-		outfile = open(outpath + 'tempToC.txt', 'a')
+		if os.path.exists(outfile):
+			os.remove(outfile)  # get rid of file if it already exists
+		outfile = open(outfile, 'a', encoding='utf-8')
 	except IOError:
 		print('Unable to open output file!')
 		return
@@ -76,7 +77,7 @@ def outputtoc(listofitems, outpath):
 	outfile.write(tocstart)
 
 	# process all but last item so we can look ahead
-	for index in range(0, len(listofitems) - 2):
+	for index in range(0, len(listofitems) - 2):  # ignore very last item, which is a dummy
 		thisitem = listofitems[index]
 		nextitem = listofitems[index + 1]
 
@@ -96,25 +97,17 @@ def outputtoc(listofitems, outpath):
 			toprint += lefttabs + '<li>\n'
 			toprint += lefttabs + thisitem.output()
 			toprint += lefttabs + '</li>\n'  # end of this item
-			toprint += lefttabs + '</ol>\n'  # end of embedded list
-			toprint += lefttabs + '</li>\n'  # end of parent item
+			leveldiff = thisitem.level - nextitem.level
+			for x in range(0, leveldiff):  # repeat as may be jumping back from eg h5 to h2
+				toprint += lefttabs + '</ol>\n'  # end of embedded list
+				toprint += lefttabs + '</li>\n'  # end of parent item
 
 		print(toprint, end='')
 		outfile.write(toprint)
 
-	lastitem = listofitems[len(listofitems) - 1]
-
-	lefttabs = '\t' * lastitem.level
-	toprint = ''
-	toprint += lefttabs + '<li>\n'
-	toprint += lefttabs + lastitem.output()
-	toprint += lefttabs + '</li>\n'
-	toprint += lefttabs + '</ol>\n'
-
-	print(toprint, end='')
-	outfile.write(toprint)
-	# eventually, write landmarks to file, too.
+	# eventually, we will write landmarks to file, too.
 	tocend = ''
+	tocend += '\t\t</ol>\n'
 	tocend += '\t\t</nav>\n'
 	tocend += '\t</body\n'
 	tocend += '</html>\n'
@@ -138,59 +131,84 @@ def getmyid(hchild):
 	return myid
 
 
-rootpath = '/Users/david/Dropbox/Standard Ebooks/Bulfinch/thomas-bulfinch_bulfinchs-mythology/'
-epubpath = rootpath + 'src/epub/'
-textpath = epubpath + 'text/'
-filelist = getcontentfiles(epubpath + 'content.opf')
-toclist = []
+def extractstrings(child):
+	retstring = ''
+	for s in child.strings:
+		retstring += s
+	return retstring
 
-for textf in filelist:
-	html_text = gethtml(textpath + textf)
-	soup = BeautifulSoup(html_text, 'html.parser')
-	print('Processing: ' + textf)
 
-	# find all the h1, h2 etc headers
-	heads = soup.find_all(re.compile('h\d'))
-	istoplevel = True
+def main():
+	parser = argparse.ArgumentParser(description="Attempts to build a table of contents for an SE project")
+	parser.add_argument("-i", "--input", dest="input", required=True, help="root path of SE project")
+	parser.add_argument("-o", "--output", dest="output", required=True, help="name of output file")
+	args = parser.parse_args()
 
-	for h in heads:
-		tocitem = TocItem()
-		tocitem.level = int(h.name[-1])
-		# this stops the first header in a file getting an anchor id, which is what we want
-		if istoplevel:
-			tocitem.id = ''
-			tocitem.filelink = textf
-			istoplevel = False
-		else:
-			tocitem.id = getmyid(h)
-			if tocitem.id == '':
+	# rootpath = '/Users/david/Dropbox/Standard Ebooks/Bulfinch/thomas-bulfinch_bulfinchs-mythology/'
+	rootpath = args.input
+	# srcpath = os.path.join(rootpath, 'src')
+	# epubpath = os.path.join(srcpath, 'epub')
+	textpath = os.path.join(rootpath, 'src', 'epub', 'text')
+	opfpath = os.path.join(rootpath, 'src', 'epub', 'content.opf')
+	filelist = getcontentfiles(opfpath)
+	toclist = []
+
+	for textf in filelist:
+		html_text = gethtml(os.path.join(textpath, textf))
+		soup = BeautifulSoup(html_text, 'html.parser')
+		print('Processing: ' + textf)
+
+		# find all the h1, h2 etc headers
+		heads = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+		istoplevel = True
+
+		for h in heads:
+			tocitem = TocItem()
+			tocitem.level = int(h.name[-1])
+			# this stops the first header in a file getting an anchor id, which is what we want
+			if istoplevel:
+				tocitem.id = ''
 				tocitem.filelink = textf
+				istoplevel = False
 			else:
-				tocitem.filelink = textf + '#' + tocitem.id
-
-		for child in h.children:
-			if child != '\n':
-				if isinstance(child, Tag):
-					try:
-						spantype = child['epub:type']
-					except KeyError:
-						spantype = 'blank'
-
-					if spantype == 'z3998:roman':
-						tocitem.roman = child.string
-					else:
-						if spantype == 'subtitle':
-							tocitem.subtitle = child.string
-						else:
-							tocitem.title = child.string
+				tocitem.id = getmyid(h)
+				if tocitem.id == '':
+					tocitem.filelink = textf
 				else:
-					tocitem.title = child.string
-		toclist.append(tocitem)
+					tocitem.filelink = textf + '#' + tocitem.id
 
-outputtoc(toclist, rootpath)
-print('done!')
+			for child in h.children:
+				if child != '\n':
+					if isinstance(child, Tag):
+						try:
+							spantype = child['epub:type']
+						except KeyError:
+							spantype = 'blank'
+
+						if spantype == 'z3998:roman':
+							tocitem.roman = extractstrings(child)
+						else:
+							if spantype == 'subtitle':
+								tocitem.subtitle = extractstrings(child)
+							else:
+								tocitem.title = extractstrings(child)
+					else:  # it's a simple NavigableString
+						tocitem.title = child.string
+			toclist.append(tocitem)
+
+	# we add this dummy item because outputtoc always needs to look ahead to the next item
+	lasttoc = TocItem()
+	lasttoc.level = 1
+	lasttoc.title = "dummy"
+	toclist.append(lasttoc)
+
+	outfile = os.path.join(rootpath, args.output)
+	outputtoc(toclist, outfile)
+	print('done!')
 
 
+if __name__ == "__main__":
+	main()
 
 
 
