@@ -136,11 +136,13 @@ def process_items(item_list, tocfile):
 			toprint += indent_two + thisitem.output()
 			toprint += indent_two + '</li>\n'  # end of this item
 			torepeat = thisitem.level - nextitem.level
-			# handle special case of halftitle as NEXT item: don't want to close off <ol> when we hit it.
-			# so treat as being same level as preceding item
-			if torepeat < 0 or nextitem.filelink == 'halftitle.xhtml':
-				torepeat = 0
-			for _ in range(0, torepeat):  # need to repeat as may be jumping back from eg h5 to h2
+			# handle special case of halftitle as NEXT item: don't want to close off toplevel <ol> when we hit it.
+			# so fudge it as being only a h2 not h1
+			if nextitem.filelink == 'halftitle.xhtml':
+				torepeat -= 1
+			assert (torepeat > 0), 'repeats of list termination less than zero!'
+
+			for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 				toprint += indent_one + '</ol>\n'  # end of embedded list
 				unclosed_ol -= 1
 				toprint += indent_none + '</li>\n'  # end of parent item
@@ -212,51 +214,65 @@ def extractstrings(child):
 
 def process_headers(soup, textf, toclist):
 	"""
-	find headers and extract data into items added to toclist
+	find headers in current file and extract data into items added to toclist
 	"""
 	# find all the h1, h2 etc headers
 	heads = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+	if len(heads) == 0:  # may be a dedication or a preface, etc with no header tag
+		special_item = TocItem()
+		if len(toclist) > 0:
+			special_item.level = toclist[-1].level  # assume same level as last item
+		else:  # must be the titlepage
+			special_item.level = 2
+		title_tag = soup.find('title')
+		special_item.title = title_tag.string
+		special_item.filelink = textf
+		toclist.append(special_item)
+		return
+
 	is_toplevel = True
-	for header in heads:
+	for heading in heads:
 		tocitem = TocItem()
-		tocitem.level = int(header.name[-1])
+		tocitem.level = int(heading.name[-1])
 		# this stops the first header in a file getting an anchor id, which is what we want
 		if is_toplevel:
 			tocitem.id = ''
 			tocitem.filelink = textf
 			is_toplevel = False
 		else:
-			tocitem.id = getmyid(header)
+			tocitem.id = getmyid(heading)
 			if tocitem.id == '':
 				tocitem.filelink = textf
 			else:
 				tocitem.filelink = textf + '#' + tocitem.id
 
-		# a header may include epub:type directly, eg <h5 epub:type="title z3998:roman">II</h5>
+		# a heading may include epub:type directly, eg <h5 epub:type="title z3998:roman">II</h5>
 		try:
-			attribs = header['epub:type']
+			attribs = heading['epub:type']
 			if 'z3998:roman' in attribs:
-				tocitem.roman = extractstrings(header)
+				tocitem.roman = extractstrings(heading)
 		except KeyError:
 			print('header with no epub:type')
 
-		for child in header.children:
+		for child in heading.contents:   # was children
 			if child != '\n':
 				if isinstance(child, Tag):
-					try:
-						spantype = child['epub:type']
-					except KeyError:
-						spantype = 'blank'
+					if child.name == 'span':
+						try:
+							spantype = child['epub:type']
+						except KeyError:
+							spantype = 'blank'
 
-					if spantype == 'z3998:roman':
-						tocitem.roman = extractstrings(child)
-					else:
-						if spantype == 'subtitle':
-							tocitem.subtitle = extractstrings(child)
+						if spantype == 'z3998:roman':
+							tocitem.roman = extractstrings(child)
 						else:
-							tocitem.title = extractstrings(child)
-				else:  # it's a simple NavigableString
-					tocitem.title = child.string
+							if spantype == 'subtitle':
+								tocitem.subtitle = extractstrings(child)
+							else:
+								tocitem.title = extractstrings(child)
+				else:  # no spans so it's a simple NavigableString
+					if tocitem.title == '':
+						tocitem.title = extractstrings(heading)
 		toclist.append(tocitem)
 
 
@@ -278,14 +294,6 @@ def main():
 	toclist = []
 
 	for textf in filelist:
-		# have to handle a special case here
-		if textf == 'titlepage.xhtml':  # this doesn't have any header tags
-			titletoc = TocItem()
-			titletoc.level = 2
-			titletoc.filelink = textf
-			titletoc.title = 'Titlepage'
-			toclist.append(titletoc)
-
 		html_text = gethtml(os.path.join(textpath, textf))
 		soup = BeautifulSoup(html_text, 'html.parser')
 		print('Processing: ' + textf)
