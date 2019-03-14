@@ -4,10 +4,16 @@ routine which tries to create a valid table of contents file for SE projects
 """
 import argparse
 import os
-import regex
 from typing import TextIO
+from enum import Enum
+import regex
 
 from bs4 import BeautifulSoup, Tag
+
+
+# global variables
+worktitle = 'WORKTITLE'
+worktype = 'fiction'
 
 
 class TocItem:
@@ -39,12 +45,50 @@ class TocItem:
 		return outstring
 
 
+class Position(Enum):
+	"""
+	enum to indicate whether a landmark is frontmatter, bodymatter or backmatter
+	"""
+	FRONT = 1
+	BODY = 2
+	BACK = 3
+
+
+class LandmarkItem:
+	"""
+	small class to hold data on landmark items found in the project
+	"""
+	title = ''
+	filelink = ''
+	epubtype = ''
+	place: Position = Position.FRONT
+
+	def output(self):
+		indent = '\t' * 4
+		indent_more = '\t' * 5
+		if self.place == Position.FRONT:
+			outstring = indent + '<li>\n' + indent_more + '<a href="text/' + self.filelink \
+						+ '" epub:type="frontmatter ' + self.epubtype + '">' + self.title + '</a>\n' + indent + '</li>\n'
+		if self.place == Position.BODY:
+			outstring = indent + '<li>\n' + indent_more + '<a href="text/' + self.filelink \
+						+ '" epub:type="bodymatter z3998:' + worktype + '">' + worktitle + '</a>\n' + indent + '</li>\n'
+		if self.place == Position.BACK:
+			outstring = indent + '<li>\n' + indent_more + '<a href="text/' + self.filelink \
+						+ '" epub:type="backmatter ' + self.epubtype + '">' + self.title + '</a>\n' + indent + '</li>\n'
+
+		return outstring
+
+
 def getcontentfiles(filename: str) -> list:
 	"""
 	reads the spine from content.opf to obtain a list of content files in the order wanted for the ToC
 	"""
 	temptext = gethtml(filename)
 	opf = BeautifulSoup(temptext, 'html.parser')
+	dctitle = opf.find('dc:title')
+	if dctitle is not None:
+		global worktitle
+		worktitle = dctitle.string
 	itemrefs = opf.find_all('itemref')
 	retlist = []
 	for itemref in itemrefs:
@@ -66,7 +110,44 @@ def gethtml(filename: str) -> str:
 	return text
 
 
-def read_toc_start_and_end(tocpath: str) -> list:
+def get_epub_type(soup: BeautifulSoup) -> str:
+	"""
+	retrieve the epubtype of this file to see if it's a landmark item
+	"""
+	# try for a heading
+	first_head = soup.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+	if first_head is not None:
+		parent = first_head.find_parent(['section', 'article'])
+		try:
+			return parent['epub:type']
+		except KeyError:
+			return ''
+	else:
+		first_section = soup.find(['section', 'article'])
+		try:
+			return first_section['epub:type']
+		except KeyError:
+			return ''
+
+
+def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
+	epubtype = get_epub_type(soup)
+	title = soup.find('title').string
+	landmark = LandmarkItem()
+	landmark.title = title
+	if epubtype != '':
+		landmark.epubtype = epubtype
+		landmark.filelink = textf
+		if epubtype in FRONTMATTER_TYPES:
+			landmark.place = Position.FRONT
+		elif epubtype in BACKMATTER_TYPES:
+			landmark.place = Position.BACK
+		else:
+			landmark.place = Position.BODY  # we'll discard all but the first of these
+		landmarks.append(landmark)
+
+
+def read_toc_start(tocpath: str) -> list:
 	"""
 	reads the existing toc and returns its start lines up until and including first <ol>
 	and end lines from final </ol> before landmarks
@@ -79,7 +160,6 @@ def read_toc_start_and_end(tocpath: str) -> list:
 	alllines = fileobject.readlines()
 	fileobject.close()
 	startlines = []
-	endlines = []
 	for index in range(0, len(alllines)):
 		line = alllines[index]
 		if '<ol>' not in line:
@@ -87,19 +167,24 @@ def read_toc_start_and_end(tocpath: str) -> list:
 		else:
 			startlines.append(line)
 			break
-	alllines.reverse()
-	for index in range(0, len(alllines)):
-		line = alllines[index]
-		if '<nav' not in line:
-			endlines.append(line)
-		else:
-			endlines.append(line)
-			endlines.append(alllines[index + 1])
-			endlines.append(alllines[index + 2])
-			endlines.reverse()
-			break
-	returnedlines = [startlines, endlines]
-	return returnedlines
+	return startlines
+
+
+def process_landmarks(landmarks_list: list, tocfile: TextIO):
+	"""
+	goes through all found landmark items and writes them to the toc file
+	"""
+	frontitems = [item for item in landmarks_list if item.place == Position.FRONT]
+	bodyitems = [item for item in landmarks_list if item.place == Position.BODY]
+	backitems = [item for item in landmarks_list if item.place == Position.BACK]
+
+	for item in frontitems:
+		tocfile.write(item.output())
+
+	tocfile.write(bodyitems[0].output())  # just the first of these
+
+	for item in backitems:
+		tocfile.write(item.output())
 
 
 def process_items(item_list: list, tocfile: TextIO):
@@ -130,7 +215,7 @@ def process_items(item_list: list, tocfile: TextIO):
 			toprint += indent_two + thisitem.output()
 			toprint += indent_two + '\t<ol>\n'
 			unclosed_ol += 1
-			print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+			# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 
 		if nextitem.level < thisitem.level:  # LAST CHILD
 			toprint += indent_two + '<li>\n'
@@ -142,7 +227,7 @@ def process_items(item_list: list, tocfile: TextIO):
 				for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 					toprint += indent_one + '</ol>\n'  # end of embedded list
 					unclosed_ol -= 1
-					print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+					# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 					toprint += indent_none + '</li>\n'  # end of parent item
 
 		tocfile.write(toprint)
@@ -150,11 +235,11 @@ def process_items(item_list: list, tocfile: TextIO):
 	while unclosed_ol > 0:
 		tocfile.write('\t\t\t</ol>\n')
 		unclosed_ol -= 1
-		print('Closing: unclosed ol = ' + str(unclosed_ol))
+		# print('Closing: unclosed ol = ' + str(unclosed_ol))
 		tocfile.write('\t\t</li>\n')
 
 
-def output_toc(item_list: list, tocpath: str, outtocpath: str):
+def output_toc(item_list: list, landmark_list, tocpath: str, outtocpath: str):
 	"""
 	outputs the contructed ToC based on the list of items found, to the specified output file
 	"""
@@ -162,7 +247,7 @@ def output_toc(item_list: list, tocpath: str, outtocpath: str):
 		print('Too few ToC items found')
 		return
 
-	startends = read_toc_start_and_end(tocpath)  # this returns a list of lists (start and end)
+	starttoc = read_toc_start(tocpath)  # this returns the start of the existing ToC
 
 	try:
 		if os.path.exists(outtocpath):
@@ -172,13 +257,23 @@ def output_toc(item_list: list, tocpath: str, outtocpath: str):
 		print('Unable to open output file! ' + outtocpath)
 		return
 
-	for line in startends[0]:  # this is the starting part of existing ToC
+	for line in starttoc:  # this is the starting part of existing ToC, includes first <ol>
 		tocfile.write(line)
 
 	process_items(item_list, tocfile)
 
-	for line in startends[1]:  # this is the ending part of the existing ToC file
-		tocfile.write(line)
+	tocfile.write('\t\t\t</ol>\n')
+	tocfile.write('\t\t</nav>\n')
+	tocfile.write('\t\t<nav epub:type="landmarks">\n')
+	tocfile.write('\t\t\t<h2 epub:type="title">Landmarks</h2>\n')
+	tocfile.write('\t\t\t<ol>\n')
+
+	process_landmarks(landmark_list, tocfile)
+
+	tocfile.write('\t\t\t</ol>\n')
+	tocfile.write('\t\t</nav>\n')
+	tocfile.write('\t</body>\n')
+	tocfile.write('</html>')
 
 	tocfile.close()
 
@@ -224,7 +319,7 @@ def process_headings(soup: BeautifulSoup, textf: str, toclist: list, nest_under_
 	# find all the h1, h2 etc headings
 	heads = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 
-	if len(heads) == 0:  # may be a dedication or an epigraph, etc with no heading tag
+	if not heads:  # may be a dedication or an epigraph, etc with no heading tag
 		special_item = TocItem()
 		sections = soup.find_all('section')  # count the sections within this file
 		special_item.level = len(sections)
@@ -244,12 +339,19 @@ def process_headings(soup: BeautifulSoup, textf: str, toclist: list, nest_under_
 
 
 def title_is_entirely_roman(title: str) -> bool:
+	"""
+	test to see if there's nothing else in a title than a roman number.
+	if so, we can collapse the epub type into the surrounding ToC <a> tag
+	"""
 	pattern = r'^<span epub:type="z3998:roman">[IVXLC]{1,10}<\/span>$'
-	r = regex.compile(pattern)
-	return r.search(title)
+	compiled_regex = regex.compile(pattern)
+	return compiled_regex.search(title)
 
 
 def process_heading(heading, is_toplevel, textf) -> TocItem:
+	"""
+	generate and return a TocItem from this heading
+	"""
 	tocitem = TocItem()
 	parent_sections = heading.find_parents(['section', 'article'])
 	tocitem.level = len(parent_sections)
@@ -275,6 +377,15 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 		tocitem.title = '<span epub:type="z3998:roman">' + tocitem.roman + '</span>'
 		return tocitem
 
+	process_heading_contents(textf, heading, tocitem)
+
+	return tocitem
+
+
+def process_heading_contents(textf, heading, tocitem):
+	"""
+	go through each item in the heading contents and try to pull out the toc item data
+	"""
 	accumulator = ''  # we'll use this to build up the title
 	for child in heading.contents:  # was children
 		if child != '\n':
@@ -302,7 +413,6 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 				accumulator += str(child)
 	if tocitem.title == '':
 		tocitem.title = accumulator
-	return tocitem
 
 
 BACKMATTER_FILENAMES = ["endnotes.xhtml", "loi.xhtml", "afterword.xhtml", "appendix.xhtml", "colophon.xhtml", "uncopyright.xhtml", "glossary.xhtml"]
@@ -316,6 +426,7 @@ def main():
 	"""
 	parser = argparse.ArgumentParser(description="Attempts to build a table of contents for an SE project")
 	parser.add_argument("-o", "--output", dest="output", required=False, help="path and filename of output file if existing ToC is to be left alone")
+	parser.add_argument("-n", "--nonfiction", dest="nonfiction", required=False, help="set to Y if the work is non-fiction rather than fiction")
 	parser.add_argument("directory", metavar="DIRECTORY", help="a Standard Ebooks source directory")
 	args = parser.parse_args()
 
@@ -327,14 +438,21 @@ def main():
 
 	if not os.path.exists(opfpath):
 		print("Error: this does not seem to be a Standard Ebooks root directory")
-		exit(8)
+		exit(-1)
+
+	global worktype
+	if args.nonfiction == 'Y':
+		worktype = 'non-fiction'
+	else:
+		worktype = 'fiction'
 
 	toclist = []
+	landmarks = []
 
 	nest_under_halftitle = False
 
 	for textf in filelist:
-		print('Processing: ' + textf)
+		# print('Processing: ' + textf)
 		html_text = gethtml(os.path.join(textpath, textf))
 		soup = BeautifulSoup(html_text, 'html.parser')
 		if textf in BACKMATTER_FILENAMES:
@@ -342,6 +460,7 @@ def main():
 		process_headings(soup, textf, toclist, nest_under_halftitle)
 		if textf == 'halftitle.xhtml':
 			nest_under_halftitle = True
+		add_landmark(soup, textf, landmarks)
 
 	# we add this dummy item because outputtoc always needs to look ahead to the next item
 	lasttoc = TocItem()
@@ -352,7 +471,7 @@ def main():
 	outpath = tocpath
 	if args.output != '':
 		outpath = args.output
-	output_toc(toclist, tocpath, outpath)
+	output_toc(toclist, landmarks, tocpath, outpath)
 	print('done!')
 
 
