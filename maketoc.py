@@ -4,6 +4,7 @@ routine which tries to create a valid table of contents file for SE projects
 """
 import argparse
 import os
+import regex
 from typing import TextIO
 
 from bs4 import BeautifulSoup, Tag
@@ -19,6 +20,7 @@ class TocItem:
 	title = ''
 	subtitle = ''
 	id = ''
+	epubtype = ''
 
 	def output(self) -> str:
 		"""
@@ -26,17 +28,13 @@ class TocItem:
 		"""
 		outstring = ''
 
-		# there are LOTS of combinations to deal with!
-		if self.subtitle == '':  # no subtitle
-			if self.roman != '':
+		if title_is_entirely_roman(self.title):
+			if self.subtitle == '':  # no subtitle
 				outstring += '\t<a href="text/' + self.filelink + '" epub:type="z3998:roman">' + self.roman + '</a>\n'
 			else:
-				outstring += '\t<a href="text/' + self.filelink + '">' + self.title + '</a>\n'
-		else:  # there is a subtitle
-			if self.roman != '':
-				outstring += '\t<a href="text/' + self.filelink + '">' + '<span epub:type="z3998:roman">' + self.roman + '</span>: ' + self.subtitle + '</a>\n'
-			else:
 				outstring += '\t<a href="text/' + self.filelink + '">' + self.title + ': ' + self.subtitle + '</a>\n'
+		else:
+			outstring += '\t<a href="text/' + self.filelink + '">' + self.title + '</a>\n'
 
 		return outstring
 
@@ -132,7 +130,7 @@ def process_items(item_list: list, tocfile: TextIO):
 			toprint += indent_two + thisitem.output()
 			toprint += indent_two + '\t<ol>\n'
 			unclosed_ol += 1
-			# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+			print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 
 		if nextitem.level < thisitem.level:  # LAST CHILD
 			toprint += indent_two + '<li>\n'
@@ -144,7 +142,7 @@ def process_items(item_list: list, tocfile: TextIO):
 				for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 					toprint += indent_one + '</ol>\n'  # end of embedded list
 					unclosed_ol -= 1
-					# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+					print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 					toprint += indent_none + '</li>\n'  # end of parent item
 
 		tocfile.write(toprint)
@@ -152,7 +150,7 @@ def process_items(item_list: list, tocfile: TextIO):
 	while unclosed_ol > 0:
 		tocfile.write('\t\t\t</ol>\n')
 		unclosed_ol -= 1
-		# print('Closing: unclosed ol = ' + str(unclosed_ol))
+		print('Closing: unclosed ol = ' + str(unclosed_ol))
 		tocfile.write('\t\t</li>\n')
 
 
@@ -189,22 +187,33 @@ def get_parent_id(hchild: Tag) -> str:
 	"""
 	climbs up the document tree looking for parent id in a <section> tag.
 	"""
-	dad = hchild.find_parent("section")
-	if dad is None:
+	parent = hchild.find_parent("section")
+	if parent is None:
 		return ''
 	try:
-		return dad['id']
+		return parent['id']
 	except KeyError:
 		return ''
 
 
-def extract_strings(child: Tag) -> str:
+def extract_strings(atag: Tag) -> str:
 	"""
-	returns the string content only of a tag (ignores embedded <abbr> etc)
+	returns only the string content of a tag, ignoring noteref and its content
 	"""
 	retstring = ''
-	for string in child.strings:
-		retstring += string
+	for child in atag.contents:
+		if child != '\n':
+			if isinstance(child, Tag):
+				try:
+					epubtype = child['epub:type']
+					if 'z3998:roman' in epubtype:
+						retstring += str(child)  # want the whole span
+					if 'noteref' in epubtype:
+						continue
+				except KeyError:  # tag has no epubtype, probably <abbr>
+					retstring += child.string
+			else:
+				retstring += child  # must be NavigableString
 	return retstring
 
 
@@ -234,9 +243,15 @@ def process_headings(soup: BeautifulSoup, textf: str, toclist: list, nest_under_
 		toclist.append(tocitem)
 
 
-def process_heading(heading, is_toplevel, textf):
+def title_is_entirely_roman(title: str) -> bool:
+	pattern = r'^<span epub:type="z3998:roman">[IVXLC]{1,10}<\/span>$'
+	r = regex.compile(pattern)
+	return r.search(title)
+
+
+def process_heading(heading, is_toplevel, textf) -> TocItem:
 	tocitem = TocItem()
-	parent_sections = heading.find_parents('section')
+	parent_sections = heading.find_parents(['section', 'article'])
 	tocitem.level = len(parent_sections)
 	# this stops the first heading in a file getting an anchor id, which is what we want
 	if is_toplevel:
@@ -248,14 +263,19 @@ def process_heading(heading, is_toplevel, textf):
 			tocitem.filelink = textf
 		else:
 			tocitem.filelink = textf + '#' + tocitem.id
-	# a heading may include epub:type directly, eg <h5 epub:type="title z3998:roman">II</h5>
+
+	# a heading may include z3998:roman directly, eg <h5 epub:type="title z3998:roman">II</h5>
 	try:
 		attribs = heading['epub:type']
-		if 'z3998:roman' in attribs:
-			tocitem.roman = extract_strings(heading)
 	except KeyError:
 		print(textf + ': warning: heading with no epub:type')
-	accumulator = ''
+		attribs = ''
+	if 'z3998:roman' in attribs:
+		tocitem.roman = extract_strings(heading)
+		tocitem.title = '<span epub:type="z3998:roman">' + tocitem.roman + '</span>'
+		return tocitem
+
+	accumulator = ''  # we'll use this to build up the title
 	for child in heading.contents:  # was children
 		if child != '\n':
 			if isinstance(child, Tag):
@@ -269,6 +289,7 @@ def process_heading(heading, is_toplevel, textf):
 
 				if 'z3998:roman' in epubtype:
 					tocitem.roman = extract_strings(child)
+					accumulator += str(child)
 				elif 'subtitle' in epubtype:
 					tocitem.subtitle = extract_strings(child)
 				elif 'title' in epubtype:
@@ -285,6 +306,8 @@ def process_heading(heading, is_toplevel, textf):
 
 
 BACKMATTER_FILENAMES = ["endnotes.xhtml", "loi.xhtml", "afterword.xhtml", "appendix.xhtml", "colophon.xhtml", "uncopyright.xhtml", "glossary.xhtml"]
+FRONTMATTER_TYPES = ['titlepage', 'imprint', 'dedication', 'epigraph', 'preface', 'introduction', 'preamble', 'foreword']
+BACKMATTER_TYPES = ['afterword', 'loi', 'rearnotes', 'endnotes', 'conclusion', 'glossary', 'colophon', 'copyright-page']
 
 
 def main():
@@ -302,11 +325,16 @@ def main():
 	opfpath = os.path.join(rootpath, 'src', 'epub', 'content.opf')
 	filelist = getcontentfiles(opfpath)
 
+	if not os.path.exists(opfpath):
+		print("Error: this does not seem to be a Standard Ebooks root directory")
+		exit(8)
+
 	toclist = []
 
 	nest_under_halftitle = False
 
 	for textf in filelist:
+		print('Processing: ' + textf)
 		html_text = gethtml(os.path.join(textpath, textf))
 		soup = BeautifulSoup(html_text, 'html.parser')
 		if textf in BACKMATTER_FILENAMES:
