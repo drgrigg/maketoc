@@ -147,29 +147,6 @@ def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
 		landmarks.append(landmark)
 
 
-def read_toc_start(tocpath: str) -> list:
-	"""
-	reads the existing toc and returns its start lines up until and including first <ol>
-	and end lines from final </ol> before landmarks
-	"""
-	try:
-		fileobject = open(tocpath, 'r', encoding='utf-8')
-	except IOError:
-		print('Could not open ' + tocpath)
-		return []
-	alllines = fileobject.readlines()
-	fileobject.close()
-	startlines = []
-	for index in range(0, len(alllines)):
-		line = alllines[index]
-		if '<ol>' not in line:
-			startlines.append(line)
-		else:
-			startlines.append(line)
-			break
-	return startlines
-
-
 def process_landmarks(landmarks_list: list, tocfile: TextIO):
 	"""
 	goes through all found landmark items and writes them to the toc file
@@ -247,8 +224,6 @@ def output_toc(item_list: list, landmark_list, tocpath: str, outtocpath: str):
 		print('Too few ToC items found')
 		return
 
-	starttoc = read_toc_start(tocpath)  # this returns the start of the existing ToC
-
 	try:
 		if os.path.exists(outtocpath):
 			os.remove(outtocpath)  # get rid of file if it already exists
@@ -257,25 +232,51 @@ def output_toc(item_list: list, landmark_list, tocpath: str, outtocpath: str):
 		print('Unable to open output file! ' + outtocpath)
 		return
 
-	for line in starttoc:  # this is the starting part of existing ToC, includes first <ol>
-		tocfile.write(line)
-
+	write_toc_start(tocfile)
 	process_items(item_list, tocfile)
+	write_toc_middle(tocfile)
+	process_landmarks(landmark_list, tocfile)
+	write_toc_end(tocfile)
 
+	tocfile.close()
+
+
+def write_toc_start(tocfile):
+	"""
+	write opening part of ToC
+	"""
+	tocfile.write('<?xml version="1.0" encoding="utf-8"?>\n')
+	tocfile.write('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" ')
+	tocfile.write('epub:prefix="z3998: http://www.daisy.org/z3998/2012/vocab/structure/, ')
+	tocfile.write('se: https://standardebooks.org/vocab/1.0" xml:lang="en-US">\n')
+	tocfile.write('\t<head>\n')
+	tocfile.write('\t\t<title>Table of Contents</title>\n')
+	tocfile.write('\t</head>\n')
+	tocfile.write('\t<body epub:type="frontmatter">\n')
+	tocfile.write('\t\t<nav epub:type="toc">\n')
+	tocfile.write('\t\t\t<h2 epub:type="title">Table of Contents</h2>\n')
+	tocfile.write('\t\t\t<ol>\n')
+
+
+def write_toc_middle(tocfile):
+	"""
+	write middle part of ToC and start of Landmarks
+	"""
 	tocfile.write('\t\t\t</ol>\n')
 	tocfile.write('\t\t</nav>\n')
 	tocfile.write('\t\t<nav epub:type="landmarks">\n')
 	tocfile.write('\t\t\t<h2 epub:type="title">Landmarks</h2>\n')
 	tocfile.write('\t\t\t<ol>\n')
 
-	process_landmarks(landmark_list, tocfile)
 
+def write_toc_end(tocfile):
+	"""
+	write closing part of ToC
+	"""
 	tocfile.write('\t\t\t</ol>\n')
 	tocfile.write('\t\t</nav>\n')
 	tocfile.write('\t</body>\n')
 	tocfile.write('</html>')
-
-	tocfile.close()
 
 
 def get_parent_id(hchild: Tag) -> str:
