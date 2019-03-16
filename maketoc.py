@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup, Tag
 # global variables
 worktitle = 'WORKTITLE'
 worktype = 'fiction'
+verbose = False
 
 
 class TocItem:
@@ -49,6 +50,7 @@ class Position(Enum):
 	"""
 	enum to indicate whether a landmark is frontmatter, bodymatter or backmatter
 	"""
+	NONE = 0
 	FRONT = 1
 	BODY = 2
 	BACK = 3
@@ -154,6 +156,22 @@ def get_epub_type(soup: BeautifulSoup) -> str:
 			return ''
 
 
+def get_place(soup: BeautifulSoup) -> Position:
+	bod = soup.body
+	try:
+		epubtype = bod['epub:type']
+	except KeyError:
+		return Position.NONE
+	if 'backmatter' in epubtype:
+		return Position.BACK
+	elif 'frontmatter' in epubtype:
+		return Position.FRONT
+	elif 'bodymatter' in epubtype:
+		return Position.BODY
+	else:
+		return Position.NONE
+
+
 def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
 	epubtype = get_epub_type(soup)
 	title = soup.find('title').string
@@ -162,12 +180,7 @@ def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
 	if epubtype != '':
 		landmark.epubtype = epubtype
 		landmark.filelink = textf
-		if epubtype in FRONTMATTER_TYPES:
-			landmark.place = Position.FRONT
-		elif epubtype in BACKMATTER_TYPES:
-			landmark.place = Position.BACK
-		else:
-			landmark.place = Position.BODY  # we'll discard all but the first of these
+		landmark.place = get_place(soup)
 		landmarks.append(landmark)
 
 
@@ -212,7 +225,8 @@ def process_items(item_list: list, tocfile: TextIO):
 			toprint += indent(thisitem.level) + thisitem.output()
 			toprint += indent(thisitem.level) + tabs(1) + '<ol>\n'
 			unclosed_ol += 1
-			# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+			if verbose:
+				print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 
 		if nextitem.level < thisitem.level:  # LAST CHILD
 			toprint += indent(thisitem.level) + '<li>\n'
@@ -224,7 +238,8 @@ def process_items(item_list: list, tocfile: TextIO):
 				for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 					toprint += indent(current_level, -1) + '</ol>\n'  # end of embedded list
 					unclosed_ol -= 1
-					# print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
+					if verbose:
+						print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 					toprint += indent(current_level, -2) + '</li>\n'  # end of parent item
 					current_level -= 1
 
@@ -233,7 +248,8 @@ def process_items(item_list: list, tocfile: TextIO):
 	while unclosed_ol > 0:
 		tocfile.write(tabs(3) + '</ol>\n')
 		unclosed_ol -= 1
-		# print('Closing: unclosed ol = ' + str(unclosed_ol))
+		if verbose:
+			print('Closing: unclosed ol = ' + str(unclosed_ol))
 		tocfile.write(tabs(2) + '</li>\n')
 
 
@@ -390,7 +406,8 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 	try:
 		attribs = heading['epub:type']
 	except KeyError:
-		print(textf + ': warning: heading with no epub:type')
+		if verbose:
+			print(textf + ': warning: heading with no epub:type')
 		attribs = ''
 	if 'z3998:roman' in attribs:
 		tocitem.roman = extract_strings(heading)
@@ -426,7 +443,8 @@ def process_heading_contents(textf, heading, tocitem):
 				elif 'title' in epubtype:
 					tocitem.title = extract_strings(child)
 				elif 'noteref' in epubtype:
-					print(textf + ": ignoring noteref in heading")
+					if verbose:
+						print(textf + ": ignoring noteref in heading")
 				else:
 					tocitem.title = extract_strings(child)
 			else:  # should be a simple NavigableString
@@ -435,9 +453,32 @@ def process_heading_contents(textf, heading, tocitem):
 		tocitem.title = accumulator
 
 
-BACKMATTER_FILENAMES = ['endnotes.xhtml', 'loi.xhtml', 'afterword.xhtml', 'appendix.xhtml', 'colophon.xhtml', 'uncopyright.xhtml', 'glossary.xhtml']
-FRONTMATTER_TYPES = ['titlepage', 'imprint', 'dedication', 'epigraph', 'abstract', 'preface', 'introduction', 'preamble', 'foreword']
-BACKMATTER_TYPES = ['afterword', 'appendix', 'acknowledgements', 'loi', 'rearnotes', 'endnotes', 'conclusion', 'glossary', 'colophon', 'copyright-page']
+# FRONTMATTER_TYPES = ['titlepage', 'imprint', 'dedication', 'epigraph', 'abstract', 'preface', 'introduction', 'preamble', 'foreword']
+# BACKMATTER_TYPES = ['afterword', 'appendix', 'acknowledgements', 'loi', 'rearnotes', 'endnotes', 'conclusion', 'glossary', 'colophon', 'copyright-page']
+
+
+def process_all_content(filelist, textpath):
+	toclist = []
+	landmarks = []
+	nest_under_halftitle = False
+	for textf in filelist:
+		if verbose:
+			print('Processing: ' + textf)
+		html_text = gethtml(os.path.join(textpath, textf))
+		soup = BeautifulSoup(html_text, 'html.parser')
+		place = get_place(soup)
+		if place == Position.BACK:
+			nest_under_halftitle = False
+		process_headings(soup, textf, toclist, nest_under_halftitle)
+		if textf == 'halftitle.xhtml':
+			nest_under_halftitle = True
+		add_landmark(soup, textf, landmarks)
+	# we add this dummy item because outputtoc always needs to look ahead to the next item
+	lasttoc = TocItem()
+	lasttoc.level = 1
+	lasttoc.title = "dummy"
+	toclist.append(lasttoc)
+	return landmarks, toclist
 
 
 def main():
@@ -446,7 +487,8 @@ def main():
 	"""
 	parser = argparse.ArgumentParser(description="Attempts to build a table of contents for an SE project")
 	parser.add_argument("-o", "--output", dest="output", required=False, help="path and filename of output file if existing ToC is to be left alone")
-	parser.add_argument("-n", "--nonfiction", dest="nonfiction", required=False, help="set to Y if the work is non-fiction rather than fiction")
+	parser.add_argument("-v", "--verbose", required=False, action="store_const", const=True, help="verbose output")
+	parser.add_argument("-n", "--nonfiction", required=False, action="store_const", const=True, help="work type is non-fiction")
 	parser.add_argument("directory", metavar="DIRECTORY", help="a Standard Ebooks source directory")
 	args = parser.parse_args()
 
@@ -461,32 +503,15 @@ def main():
 		exit(-1)
 
 	global worktype
-	if args.nonfiction == 'Y':
+	if args.nonfiction:
 		worktype = 'non-fiction'
 	else:
 		worktype = 'fiction'
 
-	toclist = []
-	landmarks = []
+	global verbose
+	verbose = args.verbose
 
-	nest_under_halftitle = False
-
-	for textf in filelist:
-		# print('Processing: ' + textf)
-		html_text = gethtml(os.path.join(textpath, textf))
-		soup = BeautifulSoup(html_text, 'html.parser')
-		if textf in BACKMATTER_FILENAMES:
-			nest_under_halftitle = False
-		process_headings(soup, textf, toclist, nest_under_halftitle)
-		if textf == 'halftitle.xhtml':
-			nest_under_halftitle = True
-		add_landmark(soup, textf, landmarks)
-
-	# we add this dummy item because outputtoc always needs to look ahead to the next item
-	lasttoc = TocItem()
-	lasttoc.level = 1
-	lasttoc.title = "dummy"
-	toclist.append(lasttoc)
+	landmarks, toclist = process_all_content(filelist, textpath)
 
 	outpath = tocpath
 	if args.output != '':
