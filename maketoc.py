@@ -19,7 +19,8 @@ verbose = False
 
 class TocItem:
 	"""
-	small class to hold data on each table of contents item found in the project
+	small class to hold data on each table of contents item 
+	found in the project
 	"""
 	filelink = ''
 	level = 0
@@ -31,7 +32,8 @@ class TocItem:
 
 	def output(self) -> str:
 		"""
-		the output method just outputs the linking tag line eg <a href=... depending on the data found
+		the output method just outputs the linking tag line 
+		eg <a href=... depending on the data found
 		"""
 		outstring = ''
 
@@ -144,16 +146,13 @@ def get_epub_type(soup: BeautifulSoup) -> str:
 	first_head = soup.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 	if first_head is not None:
 		parent = first_head.find_parent(['section', 'article'])
-		try:
-			return parent['epub:type']
-		except KeyError:
-			return ''
-	else:
-		first_section = soup.find(['section', 'article'])
-		try:
-			return first_section['epub:type']
-		except KeyError:
-			return ''
+	else:  # no heading so go hunting for some content
+		para = soup.find(['p', 'header', 'img'])  # we find the first <p> or <header>
+		parent = para.find_parent(['section', 'article'])
+	try:
+		return parent['epub:type']
+	except KeyError:
+		return ''
 
 
 def get_place(soup: BeautifulSoup) -> Position:
@@ -195,7 +194,10 @@ def process_landmarks(landmarks_list: list, tocfile: TextIO):
 	for item in frontitems:
 		tocfile.write(item.output())
 
-	tocfile.write(bodyitems[0].output())  # just the first of these
+	for item in bodyitems:
+		if 'chapter' in item.epubtype:
+			tocfile.write(item.output())  # just the first item marked as a chapter
+			break
 
 	for item in backitems:
 		tocfile.write(item.output())
@@ -234,7 +236,7 @@ def process_items(item_list: list, tocfile: TextIO):
 			toprint += indent(thisitem.level) + '</li>\n'  # end of this item
 			torepeat = thisitem.level - nextitem.level
 			current_level = thisitem.level
-			if torepeat > 0:
+			if torepeat > 0 and unclosed_ol > 0:
 				for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 					toprint += indent(current_level, -1) + '</ol>\n'  # end of embedded list
 					unclosed_ol -= 1
@@ -246,6 +248,7 @@ def process_items(item_list: list, tocfile: TextIO):
 		tocfile.write(toprint)
 
 	while unclosed_ol > 0:
+		# shouldn't ever get here, but just to be safe...
 		tocfile.write(tabs(3) + '</ol>\n')
 		unclosed_ol -= 1
 		if verbose:
@@ -350,12 +353,13 @@ def extract_strings(atag: Tag) -> str:
 
 def process_headings(soup: BeautifulSoup, textf: str, toclist: list, nest_under_halftitle: bool):
 	"""
-	find headings in current file and extract data into items added to toclist
+	find headings in current file and extract data 
+	into items added to toclist
 	"""
 	# find all the h1, h2 etc headings
 	heads = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 
-	if not heads:  # may be a dedication or an epigraph, etc with no heading tag
+	if not heads:  # may be a dedication or an epigraph, with no heading tag
 		special_item = TocItem()
 		sections = soup.find_all('section')  # count the sections within this file
 		special_item.level = len(sections)
@@ -401,8 +405,8 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 			tocitem.filelink = textf
 		else:
 			tocitem.filelink = textf + '#' + tocitem.id
-
-	# a heading may include z3998:roman directly, eg <h5 epub:type="title z3998:roman">II</h5>
+	# a heading may include z3998:roman directly, 
+	# eg <h5 epub:type="title z3998:roman">II</h5>
 	try:
 		attribs = heading['epub:type']
 	except KeyError:
@@ -421,7 +425,8 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 
 def process_heading_contents(textf, heading, tocitem):
 	"""
-	go through each item in the heading contents and try to pull out the toc item data
+	go through each item in the heading contents 
+	and try to pull out the toc item data
 	"""
 	accumulator = ''  # we'll use this to build up the title
 	for child in heading.contents:  # was children
@@ -433,7 +438,7 @@ def process_heading_contents(textf, heading, tocitem):
 					epubtype = 'blank'
 					if child.name == 'abbr':
 						accumulator += extract_strings(child)
-						continue  # skip the following and go on to next child
+						continue  # skip following and go to next child
 
 				if 'z3998:roman' in epubtype:
 					tocitem.roman = extract_strings(child)
@@ -451,10 +456,6 @@ def process_heading_contents(textf, heading, tocitem):
 				accumulator += str(child)
 	if tocitem.title == '':
 		tocitem.title = accumulator
-
-
-# FRONTMATTER_TYPES = ['titlepage', 'imprint', 'dedication', 'epigraph', 'abstract', 'preface', 'introduction', 'preamble', 'foreword']
-# BACKMATTER_TYPES = ['afterword', 'appendix', 'acknowledgements', 'loi', 'rearnotes', 'endnotes', 'conclusion', 'glossary', 'colophon', 'copyright-page']
 
 
 def process_all_content(filelist, textpath):
@@ -516,6 +517,7 @@ def main():
 	outpath = tocpath
 	if args.output != '':
 		outpath = args.output
+
 	output_toc(toclist, landmarks, outpath)
 	print('done!')
 
