@@ -12,14 +12,14 @@ from bs4 import BeautifulSoup, Tag
 
 
 # global variables
-worktitle = 'WORKTITLE'
-worktype = 'fiction'
-verbose = False
+WORKTITLE = 'WORKTITLE'
+WORKTYPE = 'fiction'
+VERBOSE = False
 
 
 class TocItem:
 	"""
-	small class to hold data on each table of contents item 
+	small class to hold data on each table of contents item
 	found in the project
 	"""
 	filelink = ''
@@ -32,7 +32,7 @@ class TocItem:
 
 	def output(self) -> str:
 		"""
-		the output method just outputs the linking tag line 
+		the output method just outputs the linking tag line
 		eg <a href=... depending on the data found
 		"""
 		outstring = ''
@@ -68,12 +68,15 @@ class LandmarkItem:
 	place: Position = Position.FRONT
 
 	def output(self):
+		"""
+		returns the linking string to be included in landmarks section
+		"""
 		if self.place == Position.FRONT:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
 						+ '" epub:type="frontmatter ' + self.epubtype + '">' + self.title + '</a>\n' + tabs(4) + '</li>\n'
 		if self.place == Position.BODY:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
-						+ '" epub:type="bodymatter z3998:' + worktype + '">' + worktitle + '</a>\n' + tabs(4) + '</li>\n'
+						+ '" epub:type="bodymatter z3998:' + WORKTYPE + '">' + WORKTITLE + '</a>\n' + tabs(4) + '</li>\n'
 		if self.place == Position.BACK:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
 						+ '" epub:type="backmatter ' + self.epubtype + '">' + self.title + '</a>\n' + tabs(4) + '</li>\n'
@@ -87,8 +90,7 @@ def tabs(num_tabs: int) -> str:
 	"""
 	if num_tabs > 0:
 		return '\t' * num_tabs
-	else:
-		return ''
+	return ''
 
 
 def indent(level: int, offset: int = 0) -> str:
@@ -99,8 +101,7 @@ def indent(level: int, offset: int = 0) -> str:
 	num_tabs = (level * 2 + 2) + offset  # offset may be negative
 	if num_tabs > 0:
 		return '\t' * num_tabs
-	else:
-		return ''
+	return ''
 
 
 def getcontentfiles(filename: str) -> list:
@@ -109,7 +110,7 @@ def getcontentfiles(filename: str) -> list:
 	"""
 	temptext = gethtml(filename)
 	opf = BeautifulSoup(temptext, 'html.parser')
-	
+
 	itemrefs = opf.find_all('itemref')
 	retlist = []
 	for itemref in itemrefs:
@@ -118,8 +119,8 @@ def getcontentfiles(filename: str) -> list:
 	# while we're here, also grab the book title
 	dctitle = opf.find('dc:title')
 	if dctitle is not None:
-		global worktitle
-		worktitle = dctitle.string
+		global WORKTITLE
+		WORKTITLE = dctitle.string
 
 	return retlist
 
@@ -156,22 +157,29 @@ def get_epub_type(soup: BeautifulSoup) -> str:
 
 
 def get_place(soup: BeautifulSoup) -> Position:
+	"""
+	returns place of file in ebook, eg frontmatter, backmatter, etc.
+	"""
 	bod = soup.body
 	try:
 		epubtype = bod['epub:type']
 	except KeyError:
 		return Position.NONE
 	if 'backmatter' in epubtype:
-		return Position.BACK
+		retval = Position.BACK
 	elif 'frontmatter' in epubtype:
-		return Position.FRONT
+		retval = Position.FRONT
 	elif 'bodymatter' in epubtype:
-		return Position.BODY
+		retval = Position.BODY
 	else:
-		return Position.NONE
+		retval = Position.NONE
+	return retval
 
 
 def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
+	"""
+	adds item to landmark list with appropriate details
+	"""
 	epubtype = get_epub_type(soup)
 	title = soup.find('title').string
 	landmark = LandmarkItem()
@@ -227,7 +235,7 @@ def process_items(item_list: list, tocfile: TextIO):
 			toprint += indent(thisitem.level) + thisitem.output()
 			toprint += indent(thisitem.level) + tabs(1) + '<ol>\n'
 			unclosed_ol += 1
-			if verbose:
+			if VERBOSE:
 				print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 
 		if nextitem.level < thisitem.level:  # LAST CHILD
@@ -240,7 +248,7 @@ def process_items(item_list: list, tocfile: TextIO):
 				for _ in range(0, torepeat):  # need to repeat a few times as may be jumping back from eg h5 to h2
 					toprint += indent(current_level, -1) + '</ol>\n'  # end of embedded list
 					unclosed_ol -= 1
-					if verbose:
+					if VERBOSE:
 						print(thisitem.filelink + ' unclosed ol = ' + str(unclosed_ol))
 					toprint += indent(current_level, -2) + '</li>\n'  # end of parent item
 					current_level -= 1
@@ -251,7 +259,7 @@ def process_items(item_list: list, tocfile: TextIO):
 		# shouldn't ever get here, but just to be safe...
 		tocfile.write(tabs(3) + '</ol>\n')
 		unclosed_ol -= 1
-		if verbose:
+		if VERBOSE:
 			print('Closing: unclosed ol = ' + str(unclosed_ol))
 		tocfile.write(tabs(2) + '</li>\n')
 
@@ -353,7 +361,7 @@ def extract_strings(atag: Tag) -> str:
 
 def process_headings(soup: BeautifulSoup, textf: str, toclist: list, nest_under_halftitle: bool):
 	"""
-	find headings in current file and extract data 
+	find headings in current file and extract data
 	into items added to toclist
 	"""
 	# find all the h1, h2 etc headings
@@ -405,12 +413,12 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 			tocitem.filelink = textf
 		else:
 			tocitem.filelink = textf + '#' + tocitem.id
-	# a heading may include z3998:roman directly, 
+	# a heading may include z3998:roman directly,
 	# eg <h5 epub:type="title z3998:roman">II</h5>
 	try:
 		attribs = heading['epub:type']
 	except KeyError:
-		if verbose:
+		if VERBOSE:
 			print(textf + ': warning: heading with no epub:type')
 		attribs = ''
 	if 'z3998:roman' in attribs:
@@ -425,7 +433,7 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 
 def process_heading_contents(textf, heading, tocitem):
 	"""
-	go through each item in the heading contents 
+	go through each item in the heading contents
 	and try to pull out the toc item data
 	"""
 	accumulator = ''  # we'll use this to build up the title
@@ -448,7 +456,7 @@ def process_heading_contents(textf, heading, tocitem):
 				elif 'title' in epubtype:
 					tocitem.title = extract_strings(child)
 				elif 'noteref' in epubtype:
-					if verbose:
+					if VERBOSE:
 						print(textf + ": ignoring noteref in heading")
 				else:
 					tocitem.title = extract_strings(child)
@@ -458,12 +466,16 @@ def process_heading_contents(textf, heading, tocitem):
 		tocitem.title = accumulator
 
 
-def process_all_content(filelist, textpath):
+def process_all_content(filelist, textpath) -> (list, list):
+	"""
+	analyze the whole content of the project, build  and return lists
+	if tocitems and landmarks
+	"""
 	toclist = []
 	landmarks = []
 	nest_under_halftitle = False
 	for textf in filelist:
-		if verbose:
+		if VERBOSE:
 			print('Processing: ' + textf)
 		html_text = gethtml(os.path.join(textpath, textf))
 		soup = BeautifulSoup(html_text, 'html.parser')
@@ -503,14 +515,14 @@ def main():
 		print("Error: this does not seem to be a Standard Ebooks root directory")
 		exit(-1)
 
-	global worktype
+	global WORKTYPE
 	if args.nonfiction:
-		worktype = 'non-fiction'
+		WORKTYPE = 'non-fiction'
 	else:
-		worktype = 'fiction'
+		WORKTYPE = 'fiction'
 
-	global verbose
-	verbose = args.verbose
+	global VERBOSE
+	VERBOSE = args.verbose
 
 	landmarks, toclist = process_all_content(filelist, textpath)
 
