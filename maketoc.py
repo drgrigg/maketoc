@@ -202,10 +202,8 @@ def process_landmarks(landmarks_list: list, tocfile: TextIO):
 	for item in frontitems:
 		tocfile.write(item.output())
 
-	for item in bodyitems:
-		if 'chapter' in item.epubtype:
-			tocfile.write(item.output())  # just the first item marked as a chapter
-			break
+	if bodyitems:
+		tocfile.write(bodyitems[0].output())  # just the first item
 
 	for item in backitems:
 		tocfile.write(item.output())
