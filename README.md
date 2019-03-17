@@ -15,8 +15,8 @@ It assumes:
 
 - print-manifest-and-spine has been run on the project
 - spine has been manually sorted into the correct order
-- content files have correctly had <section> tags applied
-- content files have correct <title> tags.
+- content files have correctly had `<section>` tags applied
+- content files have correct `<title>` tags.
 
 It works by examining the spine and processing each file in the spine in order, 
 looking for sections and heading tags (h2, h3, etc) and building a list of them with required info.
