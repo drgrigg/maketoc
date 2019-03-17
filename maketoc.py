@@ -515,7 +515,7 @@ def main():
 	landmarks, toclist = process_all_content(filelist, textpath)
 
 	outpath = tocpath
-	if args.output != '':
+	if args.output is not None:
 		outpath = args.output
 
 	output_toc(toclist, landmarks, outpath)
