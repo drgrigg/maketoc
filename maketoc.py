@@ -11,9 +11,7 @@ import regex
 from bs4 import BeautifulSoup, Tag
 
 
-# global variables
-WORKTITLE = 'WORKTITLE'
-WORKTYPE = 'fiction'
+# global variable
 VERBOSE = False
 
 
@@ -67,16 +65,17 @@ class LandmarkItem:
 	epubtype = ''
 	place: Position = Position.FRONT
 
-	def output(self):
+	def output(self, worktype: str = 'fiction', worktitle: str = 'WORKTITLE'):
 		"""
 		returns the linking string to be included in landmarks section
 		"""
+		outstring = ''
 		if self.place == Position.FRONT:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
 						+ '" epub:type="frontmatter ' + self.epubtype + '">' + self.title + '</a>\n' + tabs(4) + '</li>\n'
 		if self.place == Position.BODY:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
-						+ '" epub:type="bodymatter z3998:' + WORKTYPE + '">' + WORKTITLE + '</a>\n' + tabs(4) + '</li>\n'
+						+ '" epub:type="bodymatter z3998:' + worktype + '">' + worktitle + '</a>\n' + tabs(4) + '</li>\n'
 		if self.place == Position.BACK:
 			outstring = tabs(4) + '<li>\n' + tabs(5) + '<a href="text/' + self.filelink \
 						+ '" epub:type="backmatter ' + self.epubtype + '">' + self.title + '</a>\n' + tabs(4) + '</li>\n'
@@ -104,25 +103,25 @@ def indent(level: int, offset: int = 0) -> str:
 	return ''
 
 
-def getcontentfiles(filename: str) -> list:
+def getcontentfiles(opf: BeautifulSoup) -> list:
 	"""
 	reads the spine from content.opf to obtain a list of content files in the order wanted for the ToC
 	"""
-	temptext = gethtml(filename)
-	opf = BeautifulSoup(temptext, 'html.parser')
-
 	itemrefs = opf.find_all('itemref')
 	retlist = []
 	for itemref in itemrefs:
 		retlist.append(itemref['idref'])
+	return retlist
 
-	# while we're here, also grab the book title
+
+def get_worktitle(opf: BeautifulSoup) -> str:
+	"""
+	pulls the title of the work out of the content.opf file
+	"""
 	dctitle = opf.find('dc:title')
 	if dctitle is not None:
-		global WORKTITLE
-		WORKTITLE = dctitle.string
-
-	return retlist
+		return dctitle.string
+	return 'WORKTITLE'
 
 
 def gethtml(filename: str) -> str:
@@ -191,7 +190,7 @@ def add_landmark(soup: BeautifulSoup, textf: str, landmarks: list):
 		landmarks.append(landmark)
 
 
-def process_landmarks(landmarks_list: list, tocfile: TextIO):
+def process_landmarks(landmarks_list: list, tocfile: TextIO, worktype: str, worktitle: str):
 	"""
 	goes through all found landmark items and writes them to the toc file
 	"""
@@ -203,7 +202,7 @@ def process_landmarks(landmarks_list: list, tocfile: TextIO):
 		tocfile.write(item.output())
 
 	if bodyitems:
-		tocfile.write(bodyitems[0].output())  # just the first item
+		tocfile.write(bodyitems[0].output(worktype, worktitle))  # just the first item
 
 	for item in backitems:
 		tocfile.write(item.output())
@@ -262,7 +261,7 @@ def process_items(item_list: list, tocfile: TextIO):
 		tocfile.write(tabs(2) + '</li>\n')
 
 
-def output_toc(item_list: list, landmark_list, outtocpath: str):
+def output_toc(item_list: list, landmark_list, outtocpath: str, worktype: str, worktitle: str):
 	"""
 	outputs the contructed ToC based on the lists of items  and landmarks found, to the specified output file
 	"""
@@ -279,7 +278,7 @@ def output_toc(item_list: list, landmark_list, outtocpath: str):
 	write_toc_start(tocfile)
 	process_items(item_list, tocfile)
 	write_toc_middle(tocfile)
-	process_landmarks(landmark_list, tocfile)
+	process_landmarks(landmark_list, tocfile, worktype, worktitle)
 	write_toc_end(tocfile)
 
 	tocfile.close()
@@ -424,12 +423,12 @@ def process_heading(heading, is_toplevel, textf) -> TocItem:
 		tocitem.title = '<span epub:type="z3998:roman">' + tocitem.roman + '</span>'
 		return tocitem
 
-	process_heading_contents(textf, heading, tocitem)
+	process_heading_contents(heading, tocitem)
 
 	return tocitem
 
 
-def process_heading_contents(textf, heading, tocitem):
+def process_heading_contents(heading, tocitem):
 	"""
 	go through each item in the heading contents
 	and try to pull out the toc item data
@@ -454,8 +453,7 @@ def process_heading_contents(textf, heading, tocitem):
 				elif 'title' in epubtype:
 					tocitem.title = extract_strings(child)
 				elif 'noteref' in epubtype:
-					if VERBOSE:
-						print(textf + ": ignoring noteref in heading")
+					pass  # do nowt
 				else:
 					tocitem.title = extract_strings(child)
 			else:  # should be a simple NavigableString
@@ -499,7 +497,7 @@ def main():
 	parser = argparse.ArgumentParser(description="Attempts to build a table of contents for an SE project")
 	parser.add_argument("-o", "--output", dest="output", required=False, help="path and filename of output file if existing ToC is to be left alone")
 	parser.add_argument("-v", "--verbose", required=False, action="store_const", const=True, help="verbose output")
-	parser.add_argument("-n", "--nonfiction", required=False, action="store_const", const=True, help="work type is non-fiction")
+	parser.add_argument("-n", "--nonfiction", required=False, action="store_true", help="work type is non-fiction")
 	parser.add_argument("directory", metavar="DIRECTORY", help="a Standard Ebooks source directory")
 	args = parser.parse_args()
 
@@ -507,20 +505,23 @@ def main():
 	tocpath = os.path.join(rootpath, 'src', 'epub', 'toc.xhtml')
 	textpath = os.path.join(rootpath, 'src', 'epub', 'text')
 	opfpath = os.path.join(rootpath, 'src', 'epub', 'content.opf')
-	filelist = getcontentfiles(opfpath)
+
+	temptext = gethtml(opfpath)
+	opf = BeautifulSoup(temptext, 'html.parser')
+	filelist = getcontentfiles(opf)
+	worktitle = get_worktitle(opf)
 
 	if not os.path.exists(opfpath):
 		print("Error: this does not seem to be a Standard Ebooks root directory")
 		exit(-1)
 
-	global WORKTYPE
-	if args.nonfiction:
-		WORKTYPE = 'non-fiction'
+	if args.nonfiction is not None:
+		worktype = 'non-fiction'
 	else:
-		WORKTYPE = 'fiction'
+		worktype = 'fiction'
 
 	global VERBOSE
-	VERBOSE = args.verbose
+	VERBOSE = bool(args.verbose is not None)
 
 	landmarks, toclist = process_all_content(filelist, textpath)
 
@@ -528,7 +529,7 @@ def main():
 	if args.output is not None:
 		outpath = args.output
 
-	output_toc(toclist, landmarks, outpath)
+	output_toc(toclist, landmarks, outpath, worktype, worktitle)
 	print('done!')
 
 
